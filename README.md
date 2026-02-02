@@ -1,2 +1,2 @@
 # PrankHDMI-Monitor
-Pranostiky screen img or video
+Prank screen img or video
