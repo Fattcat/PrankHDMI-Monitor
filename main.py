@@ -2,71 +2,110 @@
 import os
 import time
 import subprocess
+import pygame
+import threading
 import sys
 import select
-import pygame
 
-HDMI_STATUS = "/sys/class/drm/card0-HDMI-A-1/status"
+# ================== KONFIGURÁCIA ==================
+BASE_DIR = "/home/pi"
+
+DEFAULT_IMG = os.path.join(BASE_DIR, "default-img.jpg")
+IMG_1 = os.path.join(BASE_DIR, "obrazok.jpg")
+IMG_PRANK = os.path.join(BASE_DIR, "CantEscape.jpg")
+SONG = os.path.join(BASE_DIR, "song.mp3")
+VIDEO = os.path.join(BASE_DIR, "video.mp4")
+
 TIMEOUT = 20
+FPS = 60
+SPEED = 4
 
-IMG_OK = "obrazok.jpg"
-IMG_PRANK = "CantEscape.jpg"
-SONG = "song.mp3"
-VIDEO = "RickRollCantEscapeVideo.mp4"
+# ==================================================
 
 
-# ---------- HDMI ----------
+# ---------- HDMI DETEKCIA (RPi) ----------
 def hdmi_connected():
     try:
-        with open(HDMI_STATUS, "r") as f:
-            return f.read().strip() == "connected"
+        out = subprocess.check_output(["tvservice", "-s"]).decode()
+        return "HDMI" in out
     except:
         return False
 
 
-# ---------- DISPLAY ----------
-def show_image(path):
-    pygame.init()
-    pygame.display.init()
+# ---------- ERROR OBRAZOVKA ----------
+def show_file_error(screen):
+    pygame.font.init()
+    font = pygame.font.SysFont(None, 48)
 
-    info = pygame.display.Info()
-    screen = pygame.display.set_mode(
-        (info.current_w, info.current_h),
-        pygame.FULLSCREEN
-    )
-
-    img = pygame.image.load(path)
-    img = pygame.transform.scale(img, screen.get_size())
-    screen.blit(img, (0, 0))
-    pygame.display.flip()
-
-    # drž obrazovku
     while True:
-        time.sleep(1)
+        screen.fill((255, 0, 0))
+        txt = font.render(
+            "súbor nie je v rovnakom priečinku !",
+            True,
+            (0, 255, 0)
+        )
+        rect = txt.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2))
+        screen.blit(txt, rect)
+        pygame.display.flip()
+        time.sleep(0.1)
+
+
+# ---------- DVD LOGO EFEKT ----------
+def dvd_bounce(screen, img_path):
+    if not os.path.isfile(img_path):
+        show_file_error(screen)
+
+    logo = pygame.image.load(img_path).convert_alpha()
+
+    sw, sh = screen.get_size()
+
+    if logo.get_width() > sw // 3:
+        scale = (sw // 3) / logo.get_width()
+        logo = pygame.transform.smoothscale(
+            logo,
+            (int(logo.get_width() * scale), int(logo.get_height() * scale))
+        )
+
+    x, y = 100, 100
+    dx, dy = SPEED, SPEED
+    clock = pygame.time.Clock()
+
+    while True:
+        x += dx
+        y += dy
+
+        if x <= 0 or x + logo.get_width() >= sw:
+            dx = -dx
+        if y <= 0 or y + logo.get_height() >= sh:
+            dy = -dy
+
+        screen.fill((0, 0, 0))
+        screen.blit(logo, (x, y))
+        pygame.display.flip()
+        clock.tick(FPS)
 
 
 # ---------- AUDIO ----------
 def play_audio(path):
+    if not os.path.isfile(path):
+        return False
     subprocess.run(["mpv", "--no-video", path])
+    return True
 
 
 # ---------- VIDEO ----------
 def play_video(path):
-    subprocess.run([
-        "mpv",
-        "--fs",
-        "--no-border",
-        "--ontop",
-        path
-    ])
+    if not os.path.isfile(path):
+        return False
+    subprocess.run(["mpv", "--fs", "--no-border", "--ontop", path])
+    return True
 
 
 # ---------- MENU ----------
-def wait_for_input(timeout):
-    print("\nHDMI pripojené.")
-    print("1. Zobraziť obrázok")
-    print("2. Spustiť zvuk")
-    print("3. Spustiť video")
+def menu_input(timeout):
+    print("\n1 – zobraziť obrázok")
+    print("2 – spustiť zvuk")
+    print("3 – spustiť video")
     print(f"\nNapíš číslo (timeout {timeout}s): ", end="", flush=True)
 
     r, _, _ = select.select([sys.stdin], [], [], timeout)
@@ -75,23 +114,47 @@ def wait_for_input(timeout):
     return None
 
 
-# ---------- MAIN ----------
-print("Čakám na pripojenie HDMI monitora...")
+# ================== MAIN ==================
+print("HDMI monitor nepripojený – čakám...")
 
 while not hdmi_connected():
     time.sleep(1)
 
-choice = wait_for_input(TIMEOUT)
+print("HDMI detegované.")
+
+pygame.init()
+pygame.display.init()
+
+info = pygame.display.Info()
+screen = pygame.display.set_mode(
+    (info.current_w, info.current_h),
+    pygame.FULLSCREEN
+)
+
+pygame.mouse.set_visible(False)
+
+# Spustíme DVD idle efekt v samostatnom vlákne
+dvd_thread = threading.Thread(
+    target=dvd_bounce,
+    args=(screen, DEFAULT_IMG),
+    daemon=True
+)
+dvd_thread.start()
+
+# Menu cez SSH
+choice = menu_input(TIMEOUT)
 
 if choice == "1":
-    show_image(IMG_OK)
+    dvd_bounce(screen, IMG_1)
 
 elif choice == "2":
-    play_audio(SONG)
+    if not play_audio(SONG):
+        show_file_error(screen)
 
 elif choice == "3":
-    play_video(VIDEO)
+    if not play_video(VIDEO):
+        show_file_error(screen)
 
 else:
-    print("\nŽiadny vstup – spúšťam prank režim.")
-    show_image(IMG_PRANK)
+    # nič nezadané → necháme DVD idle prank
+    dvd_thread.join()
